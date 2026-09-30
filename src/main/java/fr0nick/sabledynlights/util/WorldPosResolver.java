@@ -4,11 +4,13 @@ import com.simibubi.create.content.contraptions.AbstractContraptionEntity;
 import dev.ryanhcode.sable.companion.SableCompanion;
 import dev.ryanhcode.sable.companion.SubLevelAccess;
 import fr0nick.sabledynlights.lamb.LambDynLightsDelegate;
+import fr0nick.sabledynlights.virtual.VirtualLightManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 import java.lang.reflect.Field;
@@ -32,6 +34,8 @@ public final class WorldPosResolver {
 
     public static int getCombinedWorldLight(BlockAndTintGetter level, BlockPos pos, int currentLight) {
         if (pos == null || currentLight >= 15) return currentLight;
+        if (level instanceof Level world && !world.isClientSide()) return currentLight;
+        if (level instanceof ClientLevel && !VirtualLightManager.isCurrentLevel(level)) return currentLight;
 
         BlockPos worldPos = resolveWorldPos(level, pos);
         

@@ -39,6 +39,11 @@ repositories {
 
 configurations {
     lambJar
+    // Catnip's legacy POM references an unpublished Flywheel runtime. These unit
+    // tests do not launch Create/Flywheel; leave the actual mod runtime unchanged.
+    testRuntimeClasspath {
+        exclude group: 'dev.engine_room.flywheel', module: 'flywheel-neoforge-1.21.1'
+    }
 }
 
 neoForge {
@@ -64,6 +69,12 @@ neoForge {
 }
 
 dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.ow2.asm:asm-tree:9.7.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // Read the actual target classfiles for linkage checks, without booting a game.
+    testRuntimeOnly files(sourceSets.main.compileClasspath)
     implementation "maven.modrinth:create:${project.create_version}"
     
     implementation "net.createmod.catnip:Catnip-NeoForge-${project.minecraft_version}:0.8.44"
@@ -111,4 +122,11 @@ tasks.withType(ProcessResources).configureEach {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+    maxHeapSize = '512m'
+    maxParallelForks = 1
+    testLogging { events 'passed', 'skipped', 'failed' }
 }

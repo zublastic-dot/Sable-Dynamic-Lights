@@ -10,6 +10,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.lighting.LevelLightEngine;
+import net.minecraft.world.level.BlockGetter;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -38,145 +39,57 @@ import java.util.Map;
  */
 @SuppressWarnings({"deprecation", "removal"})
 public final class VirtualLightManager {
-    /** Positions contributed directly by nearby world-space dynamic lights (main world / Create case). */
-    private static final Map<BlockPos, Integer> worldPositions = new HashMap<>();
-
-    /**
-     * Positions contributed by other callers (currently: sub-level local-space transforms from
-     * {@link VirtualSableLightManager}), grouped by an opaque owner key so each contributor's positions can be
-     * diffed and cleared independently without stepping on one another.
-     */
-    private static final Map<Object, Map<BlockPos, Integer>> externalPositions = new HashMap<>();
+    private static final Object WORLD_SOURCES = new Object();
+    private static final ScopedLightSources<ClientLevel, BlockPos> SOURCES = new ScopedLightSources<>();
 
     private VirtualLightManager() {}
 
-    /**
-     * @return the virtual emission that should apply at {@code pos} (0-15), or 0 if none is active there.
-     */
-    public static int getVirtualEmission(BlockPos pos) {
-        if (pos == null) return 0;
-        int max = worldPositions.getOrDefault(pos, 0);
-        if (!externalPositions.isEmpty()) {
-            for (Map<BlockPos, Integer> group : externalPositions.values()) {
-                Integer v = group.get(pos);
-                if (v != null && v > max) max = v;
-            }
-        }
-        return max;
+    public static boolean isCurrentLevel(BlockGetter level) {
+        return level instanceof ClientLevel && SOURCES.owns(level);
     }
 
-    /**
-     * Self-contained tick: collects active lights itself. Used by call sites that don't already have a candidate
-     * list handy (e.g. when a contraption entity joins the world outside the main tick loop).
-     */
+    public static int getVirtualEmission(ClientLevel level, BlockPos pos) {
+        return pos == null ? 0 : SOURCES.get(level, pos);
+    }
+
     public static void onClientTick() {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null) return;
-        onClientTick(collectActiveLightCandidates(mc));
+        if (mc.level != null) onClientTick(collectActiveLightCandidates(mc));
     }
 
-    /**
-     * Same as {@link #onClientTick()}, but reuses a candidate list already collected by the caller (see
-     * {@code LambModEventHandler}, which collects it once per tick and shares it with
-     * {@link VirtualSableLightManager} too) instead of re-scanning LambDynamicLights' active sources again.
-     */
     public static void onClientTick(List<LightCandidate> candidates) {
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level;
+        ClientLevel level = Minecraft.getInstance().level;
         if (level == null) return;
-
-        LevelLightEngine worldLightEngine = level.getLightEngine();
-        if (worldLightEngine == null) return;
-
+        if (SOURCES.bind(level, VirtualLightManager::invalidate)) {
+            // Shell samples and transformed sources belong to the previous world too.
+            VirtualSableLightManager.clearAll();
+        }
         Map<BlockPos, Integer> current = new HashMap<>();
         for (LightCandidate candidate : candidates) {
-            current.merge(candidate.pos(), candidate.luminance(), Math::max);
+            if (candidate.entity() != null && candidate.entity().level() != level) continue;
+            current.merge(candidate.pos().immutable(), candidate.luminance(), Math::max);
         }
-        applyDiff(worldPositions, current, worldLightEngine);
-
-        worldPositions.clear();
-        worldPositions.putAll(current);
+        SOURCES.put(WORLD_SOURCES, current, VirtualLightManager::invalidate);
     }
 
-    /**
-     * Called by other contributors (currently just {@link VirtualSableLightManager}) to publish the set of
-     * positions - in the shared light-engine coordinate space - that should currently act as virtual light
-     * sources on their behalf. Diffed internally against what that same owner published last time.
-     */
     public static void syncExternalPositions(Object owner, Map<BlockPos, Integer> positions) {
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level;
-        if (level == null) return;
-
-        LevelLightEngine lightEngine = level.getLightEngine();
-        if (lightEngine == null) return;
-
-        Map<BlockPos, Integer> previous = externalPositions.computeIfAbsent(owner, k -> new HashMap<>());
-        applyDiff(previous, positions, lightEngine);
-
-        if (positions.isEmpty()) {
-            externalPositions.remove(owner);
-        } else {
-            previous.clear();
-            previous.putAll(positions);
-        }
+        if (!isCurrentLevel(Minecraft.getInstance().level)) return;
+        Map<BlockPos, Integer> stable = new HashMap<>();
+        positions.forEach((pos, light) -> stable.put(pos.immutable(), light));
+        SOURCES.put(owner, stable, VirtualLightManager::invalidate);
     }
 
-    /**
-     * Removes every position previously contributed by {@code owner} (e.g. when a sub-level unloads), letting
-     * the light engine relax back down at those positions.
-     */
     public static void clearExternalPositions(Object owner) {
-        Map<BlockPos, Integer> previous = externalPositions.remove(owner);
-        if (previous == null || previous.isEmpty()) return;
-
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level;
-        LevelLightEngine lightEngine = level != null ? level.getLightEngine() : null;
-        if (lightEngine == null) return;
-
-        for (BlockPos pos : previous.keySet()) {
-            try { lightEngine.checkBlock(pos); } catch (Throwable ignored) {}
-        }
+        SOURCES.remove(owner, VirtualLightManager::invalidate);
     }
 
     public static void clearAll() {
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level;
-        LevelLightEngine lightEngine = level != null ? level.getLightEngine() : null;
-
-        if (lightEngine != null) {
-            for (BlockPos pos : worldPositions.keySet()) {
-                try { lightEngine.checkBlock(pos); } catch (Throwable ignored) {}
-            }
-            for (Map<BlockPos, Integer> group : externalPositions.values()) {
-                for (BlockPos pos : group.keySet()) {
-                    try { lightEngine.checkBlock(pos); } catch (Throwable ignored) {}
-                }
-            }
-        }
-
-        worldPositions.clear();
-        externalPositions.clear();
+        SOURCES.bind(null, VirtualLightManager::invalidate);
     }
 
-    /**
-     * Calls {@link LevelLightEngine#checkBlock} for every position whose presence or luminance differs between
-     * {@code previous} and {@code current}. Does not itself mutate {@code previous}; callers commit the new
-     * state afterward.
-     */
-    private static void applyDiff(Map<BlockPos, Integer> previous, Map<BlockPos, Integer> current, LevelLightEngine lightEngine) {
-        for (Map.Entry<BlockPos, Integer> entry : current.entrySet()) {
-            Integer old = previous.get(entry.getKey());
-            if (!entry.getValue().equals(old)) {
-                try { lightEngine.checkBlock(entry.getKey()); } catch (Throwable ignored) {}
-            }
-        }
-        for (BlockPos pos : previous.keySet()) {
-            if (!current.containsKey(pos)) {
-                try { lightEngine.checkBlock(pos); } catch (Throwable ignored) {}
-            }
-        }
+    private static void invalidate(ClientLevel level, BlockPos pos) {
+        // Invalidate the owning level, including after Minecraft switches its main level.
+        if (level != null && level.hasChunkAt(pos)) level.getLightEngine().checkBlock(pos);
     }
 
     /**
@@ -201,7 +114,9 @@ public final class VirtualLightManager {
                 for (Object obj : sources) {
                     if (obj instanceof DynamicLightSource source && source.isDynamicLightEnabled() && source.getLuminance() > 0) {
                         BlockPos pos = BlockPos.containing(source.getDynamicLightX(), source.getDynamicLightY(), source.getDynamicLightZ());
-                        current.add(new LightCandidate(pos, source.getLuminance(), resolveEntity(obj)));
+                        Entity entity = resolveEntity(obj);
+                        if (entity == null || entity.level() == mc.level)
+                            current.add(new LightCandidate(pos, source.getLuminance(), entity));
                     }
                 }
             }
