@@ -22,7 +22,7 @@ public class LambModEventHandler {
 
     @SubscribeEvent
     public static void onEntityJoinWorld(EntityJoinLevelEvent event) {
-        if (event.getLevel().isClientSide() && event.getEntity() instanceof AbstractContraptionEntity contraptionEntity) {
+        if (event.getLevel() == Minecraft.getInstance().level && event.getEntity() instanceof AbstractContraptionEntity contraptionEntity) {
             ContraptionEntityEventHandler.onContraptionEntityJoin(contraptionEntity);
             VirtualLightManager.onClientTick();
         }
@@ -37,7 +37,7 @@ public class LambModEventHandler {
 
     @SubscribeEvent
     public static void onTick(LevelTickEvent.Post event) {
-        if (event.getLevel().isClientSide()) {
+        if (event.getLevel() == Minecraft.getInstance().level) {
             ContraptionEntityEventHandler.onTick(event.getLevel());
             SableSubLevelEventHandler.onTick(event.getLevel());
 
@@ -58,7 +58,7 @@ public class LambModEventHandler {
 
     @SubscribeEvent
     public static void onLevelUnload(LevelEvent.Unload event) {
-        if (event.getLevel().isClientSide()) {
+        if (VirtualLightManager.isCurrentLevel(event.getLevel())) {
             VirtualLightManager.clearAll();
             VirtualSableLightManager.clearAll();
         }
