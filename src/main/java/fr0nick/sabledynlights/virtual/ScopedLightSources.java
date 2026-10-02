@@ -19,6 +19,12 @@ public final class ScopedLightSources<W, P> {
         return world != null && current.world == world ? current.levels.getOrDefault(position, 0) : 0;
     }
 
+    /** One immutable, world-scoped publication, also used when a light engine relights a chunk. */
+    public Map<P, Integer> sources(W world) {
+        var current = snapshot;
+        return world != null && current.world == world ? current.levels : Map.of();
+    }
+
     public boolean bind(W world, BiConsumer<W, P> invalidate) {
         var old = snapshot;
         if (old.world == world) return false;

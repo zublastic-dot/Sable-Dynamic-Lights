@@ -7,6 +7,25 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ScopedLightSourcesTest {
+    @Test void relightSnapshotIsImmutableAndCannotCrossWorldIdentity() {
+        var lights = new ScopedLightSources<Object, String>();
+        Object client = new Object(), server = new Object(), replacement = new Object();
+        lights.bind(client, (w, p) -> fail());
+        lights.put("held", Map.of("air", 15), (w, p) -> {});
+        lights.put("ship", Map.of("air", 12, "plot", 8), (w, p) -> {});
+        var snapshot = lights.sources(client);
+        assertEquals(Map.of("air", 15, "plot", 8), snapshot);
+        assertThrows(UnsupportedOperationException.class, () -> snapshot.put("another", 4));
+        assertTrue(lights.sources(server).isEmpty());
+        assertTrue(lights.sources(null).isEmpty());
+        lights.remove("held", (w, p) -> {});
+        assertEquals(15, snapshot.get("air"));
+        assertEquals(12, lights.sources(client).get("air"));
+        lights.bind(replacement, (w, p) -> assertTrue(lights.sources(w).isEmpty()));
+        assertTrue(lights.sources(client).isEmpty());
+        assertTrue(lights.sources(replacement).isEmpty());
+    }
+
     @Test void identicalCoordinatesCannotLeakToServerOrAnotherDimension() {
         var lights = new ScopedLightSources<Object, String>();
         Object client = new Object(), server = new Object(), nether = new Object();
