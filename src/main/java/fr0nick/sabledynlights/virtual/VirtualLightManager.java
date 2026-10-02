@@ -6,11 +6,13 @@ import fr0nick.sabledynlights.lamb.LambDynLightsDelegate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.ChunkPos;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -41,6 +43,7 @@ import java.util.Map;
 public final class VirtualLightManager {
     private static final Object WORLD_SOURCES = new Object();
     private static final ScopedLightSources<ClientLevel, BlockPos> SOURCES = new ScopedLightSources<>();
+    private static final SourceSectionIndex SOURCE_SECTIONS = new SourceSectionIndex();
 
     private VirtualLightManager() {}
 
@@ -52,6 +55,37 @@ public final class VirtualLightManager {
         return pos == null ? 0 : SOURCES.get(level, pos);
     }
 
+    /** The optional engine adapter uses the same client-only source map as vanilla. */
+    public static int withVirtualEmission(BlockGetter level, BlockPos pos, int blockEmission) {
+        if (!(level instanceof ClientLevel clientLevel)) return blockEmission;
+        return Math.max(blockEmission, getVirtualEmission(clientLevel, pos));
+    }
+
+    /** No block/chunk lookups: relighting must also discover virtual emitters in all-air sections. */
+    public static List<BlockPos> getVirtualSources(BlockGetter level, ChunkPos chunk, int minY, int maxY) {
+        if (!(level instanceof ClientLevel clientLevel)) return List.of();
+        return SourcePositions.inChunk(SOURCES.sources(clientLevel).keySet(), chunk.x, chunk.z, minY, maxY);
+    }
+
+    /** Keep only sections reached by this world's client sources available to ScalableLux. */
+    public static boolean needsLightSection(BlockGetter level, int x, int y, int z) {
+        return level instanceof ClientLevel clientLevel
+                && SOURCES.owns(clientLevel)
+                && SOURCE_SECTIONS.covers(SOURCES.sources(clientLevel), x, y, z);
+    }
+
+    public static void recheckSectionSources(BlockGetter level, SectionPos section) {
+        if (!(level instanceof ClientLevel clientLevel) || !SOURCES.owns(clientLevel)) return;
+        for (var pos : SOURCE_SECTIONS.nearSection(SOURCES.sources(clientLevel), section.x(), section.y(), section.z()))
+            invalidate(clientLevel, pos);
+    }
+
+    public static void recheckChunkSources(BlockGetter level, ChunkPos chunk) {
+        if (!(level instanceof ClientLevel clientLevel) || !SOURCES.owns(clientLevel)) return;
+        for (var pos : SOURCE_SECTIONS.nearChunk(SOURCES.sources(clientLevel), chunk.x, chunk.z))
+            invalidate(clientLevel, pos);
+    }
+
     public static void onClientTick() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level != null) onClientTick(collectActiveLightCandidates(mc));
@@ -61,6 +95,7 @@ public final class VirtualLightManager {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) return;
         if (SOURCES.bind(level, VirtualLightManager::invalidate)) {
+            SOURCE_SECTIONS.clear();
             // Shell samples and transformed sources belong to the previous world too.
             VirtualSableLightManager.clearAll();
         }
@@ -85,6 +120,7 @@ public final class VirtualLightManager {
 
     public static void clearAll() {
         SOURCES.bind(null, VirtualLightManager::invalidate);
+        SOURCE_SECTIONS.clear();
     }
 
     private static void invalidate(ClientLevel level, BlockPos pos) {

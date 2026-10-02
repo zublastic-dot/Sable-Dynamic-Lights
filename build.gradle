@@ -72,8 +72,11 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.ow2.asm:asm-tree:9.7.1'
+    // Exact optional engine ABI used by the Portal Lab baseline. Test-only: never bundle or require it.
+    testRuntimeOnly('maven.modrinth:scalablelux:9KuFoPhC') { transitive = false }
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     // Read the actual target classfiles for linkage checks, without booting a game.
+    testCompileOnly files(sourceSets.main.compileClasspath)
     testRuntimeOnly files(sourceSets.main.compileClasspath)
     implementation "maven.modrinth:create:${project.create_version}"
     
